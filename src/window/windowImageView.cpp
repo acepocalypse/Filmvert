@@ -1,6 +1,7 @@
 #include "preferences.h"
 #include "window.h"
 #include "windowUtils.h"
+#include "imageViewCoordinates.h"
 #include <imgui.h>
 #include <string>
 
@@ -235,160 +236,111 @@ void mainWindow::imageView() {
         static bool minDrag = false;
         static bool maxDrag = false;
 
-        // Convert crop box coordinates to screen space, accounting for rotation
-        ImVec2 cropBoxScreen[4];
-        for (int i = 0; i < 4; i++) {
-            int x = activeImage()->imgParam.cropBoxX[i] * activeImage()->width;
-            int y = activeImage()->imgParam.cropBoxY[i] * activeImage()->height;
+        // Use the displayed rectangle for both analysis and min/max overlays.
+        auto viewToScreen = [&](imageViewCoordinates::Point view) {
+            return ImVec2(imagePos.x + view.x * dispSize.x,
+                          imagePos.y + view.y * dispSize.y);
+        };
+        auto pointToScreen = [&](float x, float y, ImVec2& screen) {
+            imageViewCoordinates::Point view;
+            if (!imageViewCoordinates::sourceToView({x, y}, activeImage()->imgParam,
+                    (float)activeImage()->width / activeImage()->height, view))
+                return false;
+            screen = viewToScreen(view);
+            return true;
+        };
+        auto screenToPoint = [&](ImVec2 screen) {
+            return imageViewCoordinates::viewToSource(
+                {(screen.x - imagePos.x) / dispSize.x,
+                 (screen.y - imagePos.y) / dispSize.y}, activeImage()->imgParam,
+                (float)activeImage()->width / activeImage()->height);
+        };
 
-            // Transform coordinates based on rotation
-            int transformedX = x;
-            int transformedY = y;
-            transformCoordinates(transformedX, transformedY, activeImage()->imgParam.rotation,
-                                 activeImage()->width, activeImage()->height);
-
-            // Calculate screen positions with proper scroll offset
-            cropBoxScreen[i].x = imagePos.x + transformedX * actualScale;
-            cropBoxScreen[i].y = imagePos.y + transformedY * actualScale;
-
-        }
-
-        // Draw the crop box lines
         ImDrawList* drawList = ImGui::GetWindowDrawList();
-        ImU32 lineColor = IM_COL32(255, 255, 0, 255); // Yellow
-        float lineThickness = 2.0f;
+        const float handleRadius = 8.0f;
+        const ImU32 handleColor = IM_COL32(255, 0, 0, 255);
+        const ImU32 handleHoverColor = IM_COL32(255, 128, 0, 255);
+        ImVec2 cropBoxScreen[4] = {};
+        bool analysisVisible = false;
 
-        // Draw the lines connecting the corners - connect in order: top-left, top-right, bottom-right, bottom-left
-        if (cropDisplay && !cropVisible && !activeImage()->imgParam.cropEnable) {
-            drawList->AddLine(cropBoxScreen[0], cropBoxScreen[1], lineColor, lineThickness); // Top line
-            drawList->AddLine(cropBoxScreen[1], cropBoxScreen[2], lineColor, lineThickness); // Right line
-            drawList->AddLine(cropBoxScreen[2], cropBoxScreen[3], lineColor, lineThickness); // Bottom line
-            drawList->AddLine(cropBoxScreen[3], cropBoxScreen[0], lineColor, lineThickness); // Left line
-        }
-
-
-        // Debug drawing to verify corner positions
-        char cornerText[32];
-        for (int i = 0; i < 4; i++) {
-            sprintf(cornerText, "C%d", i);
-            if (cropDisplay) {
-                //drawList->AddText(cropBoxScreen[i], IM_COL32(255, 255, 255, 255), cornerText);
+        if (cropDisplay && !cropVisible && dispSizeValid) {
+            std::vector<imageViewCoordinates::Point> corners;
+            for (int i = 0; i < 4; ++i) {
+                imageViewCoordinates::Point view;
+                if (!imageViewCoordinates::sourceToViewUnclipped(
+                        {activeImage()->imgParam.cropBoxX[i], activeImage()->imgParam.cropBoxY[i]},
+                        activeImage()->imgParam, (float)activeImage()->width / activeImage()->height, view))
+                    break;
+                corners.push_back(view);
+                // Keep off-crop corner handles at the image edge so a region
+                // larger than the crop can still be adjusted from this view.
+                cropBoxScreen[i] = viewToScreen({std::clamp(view.x, 0.0f, 1.0f),
+                                               std::clamp(view.y, 0.0f, 1.0f)});
             }
-        }
-
-        // Draw the corner handles
-        float handleRadius = 8.0f;
-        ImU32 handleColor = IM_COL32(255, 0, 0, 255); // Red
-        ImU32 handleHoverColor = IM_COL32(255, 128, 0, 255); // Orange
-
-        for (int i = 0; i < 4; i++) {
-            // Check if mouse is hovering over this handle
-            ImVec2 mousePos = ImGui::GetIO().MousePos;
-            float distSq = (mousePos.x - cropBoxScreen[i].x) * (mousePos.x - cropBoxScreen[i].x) +
-                           (mousePos.y - cropBoxScreen[i].y) * (mousePos.y - cropBoxScreen[i].y);
-            bool handleHovered = distSq <= (handleRadius * handleRadius);
-
-            // Draw the handle with appropriate color
-            if (cropDisplay && !cropVisible && !activeImage()->imgParam.cropEnable) {
-                drawList->AddCircleFilled(
-                    cropBoxScreen[i],
-                    handleRadius,
-                    handleHovered ? handleHoverColor : handleColor
-                );
-            }
-
-
-            // Handle dragging
-            if (handleHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !dragging) {
-                draggedCorner = i;
-                dragging = true;
-                currentlyInteracting = true;
-            }
-        }
-        // Draw min/max positions if available
-        if (minMaxDisp && !cropVisible && !activeImage()->imgParam.cropEnable) {
-            if (validIm()){
-                if (activeImage()->imgParam.minX > 0.001 && activeImage()->imgParam.maxY > 0.001) {
-                    // Transform coordinates for minPoint
-                    int minX = activeImage()->imgParam.minX * activeImage()->width;
-                    int minY = activeImage()->imgParam.minY * activeImage()->height;
-                    transformCoordinates(minX, minY, activeImage()->imgParam.rotation,
-                                         activeImage()->width, activeImage()->height);
-
-                    // Transform coordinates for maxPoint
-                    int maxX = activeImage()->imgParam.maxX * activeImage()->width;
-                    int maxY = activeImage()->imgParam.maxY * activeImage()->height;
-                    transformCoordinates(maxX, maxY, activeImage()->imgParam.rotation,
-                                         activeImage()->width, activeImage()->height);
-
-                    ImVec2 minPoint;
-                    minPoint.x = imagePos.x + (float)minX * actualScale;
-                    minPoint.y = imagePos.y + (float)minY * actualScale;
-                    ImVec2 maxPoint;
-                    maxPoint.x = imagePos.x + (float)maxX * actualScale;
-                    maxPoint.y = imagePos.y + (float)maxY * actualScale;
-                    float pointRadius = 8.0f;
-
-                    // Check if mouse is hovering
-                    ImVec2 mousePos = ImGui::GetIO().MousePos;
-                    float minDistSq = (mousePos.x - minPoint.x) * (mousePos.x - minPoint.x) +
-                                   (mousePos.y - minPoint.y) * (mousePos.y - minPoint.y);
-                    float maxDistSq = (mousePos.x - maxPoint.x) * (mousePos.x - maxPoint.x) +
-                                   (mousePos.y - maxPoint.y) * (mousePos.y - maxPoint.y);
-                    bool minHovered = minDistSq <= (handleRadius * handleRadius);
-                    bool maxHovered = maxDistSq <= (handleRadius * handleRadius);
-
-
-                    ImU32 handleColor = IM_COL32(255, 0, 0, 255);
-                    ImU32 handleHoverColor = IM_COL32(255, 128, 0, 255); // Orange
-                    char minText[4] = "Min";
-                    char maxText[4] = "Max";
-                    drawList->AddText(minPoint, IM_COL32(255, 255, 255, 255), minText);
-                    drawList->AddText(maxPoint, IM_COL32(255, 255, 255, 255), maxText);
-                    drawList->AddCircleFilled(minPoint, pointRadius, minHovered ? handleHoverColor : handleColor);
-                    drawList->AddCircleFilled(maxPoint, pointRadius, maxHovered ? handleHoverColor : handleColor);
-
-                    if (minHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !minDrag) {
-                        minDrag = true;
-                        currentlyInteracting = true;
-                    }
-                    if (maxHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !maxDrag) {
-                        maxDrag = true;
-                        currentlyInteracting = true;
-                    }
+            if (corners.size() == 4) {
+                const auto outline = imageViewCoordinates::clipPolygonToView(corners);
+                analysisVisible = outline.size() >= 3;
+                if (analysisVisible) {
+                    for (size_t i = 0; i < outline.size(); ++i)
+                        drawList->AddLine(viewToScreen(outline[i]),
+                            viewToScreen(outline[(i + 1) % outline.size()]),
+                            IM_COL32(255, 255, 0, 255), 2.0f);
                 }
             }
         }
 
+        if (analysisVisible) {
+            const ImVec2 mousePos = ImGui::GetIO().MousePos;
+            for (int i = 0; i < 4; ++i) {
+                const float dx = mousePos.x - cropBoxScreen[i].x;
+                const float dy = mousePos.y - cropBoxScreen[i].y;
+                const bool hovered = ImGui::IsWindowHovered() &&
+                                     dx * dx + dy * dy <= handleRadius * handleRadius;
+                drawList->AddCircleFilled(cropBoxScreen[i], handleRadius,
+                                          hovered ? handleHoverColor : handleColor);
+                if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                    !dragging && !minDrag && !maxDrag) {
+                    draggedCorner = i;
+                    dragging = true;
+                    currentlyInteracting = true;
+                }
+            }
+        }
+        if (!analysisVisible && dragging && draggedCorner >= 0) {
+            dragging = false;
+            draggedCorner = -1;
+            activeRoll()->rollUpState();
+        }
+        // Crop editing temporarily owns the handles. Applied crops still show
+        // each min/max point independently if that source pixel is visible.
+        if (minMaxDisp && !cropVisible && dispSizeValid) {
+            auto drawPoint = [&](float x, float y, const char* label, bool& pointDrag) {
+                ImVec2 point;
+                if (!pointToScreen(x, y, point)) return;
+                const ImVec2 mousePos = ImGui::GetIO().MousePos;
+                const float dx = mousePos.x - point.x, dy = mousePos.y - point.y;
+                const bool hovered = ImGui::IsWindowHovered() &&
+                                     dx * dx + dy * dy <= handleRadius * handleRadius;
+                drawList->AddText(point, IM_COL32(255, 255, 255, 255), label);
+                drawList->AddCircleFilled(point, handleRadius,
+                    hovered ? handleHoverColor : handleColor);
+                if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                    !minDrag && !maxDrag && !dragging) {
+                    pointDrag = true;
+                    currentlyInteracting = true;
+                }
+            };
+            drawPoint(activeImage()->imgParam.minX, activeImage()->imgParam.minY, "Min", minDrag);
+            drawPoint(activeImage()->imgParam.maxX, activeImage()->imgParam.maxY, "Max", maxDrag);
+        }
         // If dragging a corner, update its position
         if (dragging && draggedCorner >= 0) {
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                // Calculate the new position in screen space
-                ImVec2 mousePos = ImGui::GetIO().MousePos;
-
-                // Convert to image space (rotated)
-                ImVec2 newPosRotated;
-                newPosRotated.x = (mousePos.x - imagePos.x) / actualScale;
-                newPosRotated.y = (mousePos.y - imagePos.y) / actualScale;
-
-                // Cases 5-8 all swap the display width/height relative to the original
-                bool swapDims = (activeImage()->imgParam.rotation >= 5 && activeImage()->imgParam.rotation <= 8);
-                int rotatedWidth  = swapDims ? activeImage()->height : activeImage()->width;
-                int rotatedHeight = swapDims ? activeImage()->width  : activeImage()->height;
-
-                newPosRotated.x = ImClamp(newPosRotated.x, 0.0f, (float)rotatedWidth);
-                newPosRotated.y = ImClamp(newPosRotated.y, 0.0f, (float)rotatedHeight);
-
-                // Convert from rotated to original image coordinates
-                int origX = newPosRotated.x;
-                int origY = newPosRotated.y;
-                inverseTransformCoordinates(origX, origY, activeImage()->imgParam.rotation,
-                                            activeImage()->width, activeImage()->height);
-
-                // Update the corner position
-                activeImage()->imgParam.cropBoxX[draggedCorner] = (float)origX / activeImage()->width;
-                activeImage()->imgParam.cropBoxY[draggedCorner] = (float)origY / activeImage()->height;
-
+                if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+                    const auto point = screenToPoint(ImGui::GetIO().MousePos);
+                    activeImage()->imgParam.cropBoxX[draggedCorner] = point.x;
+                    activeImage()->imgParam.cropBoxY[draggedCorner] = point.y;
+                }
                 currentlyInteracting = true;
             } else {
                 // Mouse released, stop dragging
@@ -398,30 +350,18 @@ void mainWindow::imageView() {
             }
         }
 
+        if (cropVisible || !minMaxDisp || !dispSizeValid) {
+            minDrag = false;
+            maxDrag = false;
+        }
+
         // If dragging min
         if (minDrag) {
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                // Calculate the new position in screen space
-                ImVec2 mousePos = ImGui::GetIO().MousePos;
-                // Convert to image space (rotated)
-                ImVec2 newPosRotated;
-                newPosRotated.x = (mousePos.x - imagePos.x) / actualScale;
-                newPosRotated.y = (mousePos.y - imagePos.y) / actualScale;
-                bool swapDims = (activeImage()->imgParam.rotation >= 5 && activeImage()->imgParam.rotation <= 8);
-                int rotatedWidth  = swapDims ? activeImage()->height : activeImage()->width;
-                int rotatedHeight = swapDims ? activeImage()->width  : activeImage()->height;
-
-                newPosRotated.x = ImClamp(newPosRotated.x, 0.0f, (float)rotatedWidth);
-                newPosRotated.y = ImClamp(newPosRotated.y, 0.0f, (float)rotatedHeight);
-                // Convert from rotated to original image coordinates
-                int origX = newPosRotated.x;
-                int origY = newPosRotated.y;
-                inverseTransformCoordinates(origX, origY, activeImage()->imgParam.rotation,
-                                            activeImage()->width, activeImage()->height);
-                // Update the corner position
-                activeImage()->imgParam.minX = (float)origX / activeImage()->width;
-                activeImage()->imgParam.minY = (float)origY / activeImage()->height;
-
+                const auto point = screenToPoint(ImGui::GetIO().MousePos);
+                activeImage()->imgParam.minX = point.x;
+                activeImage()->imgParam.minY = point.y;
+                currentlyInteracting = true;
                 activeImage()->minSel = true;
                 // Does this need to be on it's own thread?
                 activeImage()->setMinMax(dispOCIO);
@@ -437,27 +377,10 @@ void mainWindow::imageView() {
         // If dragging max
         if (maxDrag) {
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                // Calculate the new position in screen space
-                ImVec2 mousePos = ImGui::GetIO().MousePos;
-                // Convert to image space (rotated)
-                ImVec2 newPosRotated;
-                newPosRotated.x = (mousePos.x - imagePos.x) / actualScale;
-                newPosRotated.y = (mousePos.y - imagePos.y) / actualScale;
-                bool swapDims = (activeImage()->imgParam.rotation >= 5 && activeImage()->imgParam.rotation <= 8);
-                int rotatedWidth  = swapDims ? activeImage()->height : activeImage()->width;
-                int rotatedHeight = swapDims ? activeImage()->width  : activeImage()->height;
-
-                newPosRotated.x = ImClamp(newPosRotated.x, 0.0f, (float)rotatedWidth);
-                newPosRotated.y = ImClamp(newPosRotated.y, 0.0f, (float)rotatedHeight);
-                // Convert from rotated to original image coordinates
-                int origX = newPosRotated.x;
-                int origY = newPosRotated.y;
-                inverseTransformCoordinates(origX, origY, activeImage()->imgParam.rotation,
-                                            activeImage()->width, activeImage()->height);
-                // Update the corner position
-                activeImage()->imgParam.maxX = (float)origX / activeImage()->width;
-                activeImage()->imgParam.maxY = (float)origY / activeImage()->height;
-
+                const auto point = screenToPoint(ImGui::GetIO().MousePos);
+                activeImage()->imgParam.maxX = point.x;
+                activeImage()->imgParam.maxY = point.y;
+                currentlyInteracting = true;
                 activeImage()->minSel = false;
                 // Does this need to be on it's own thread?
                 activeImage()->setMinMax(dispOCIO);
