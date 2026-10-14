@@ -132,19 +132,31 @@ void mainWindow::analyzeImage() {
         LOG_INFO("Analyzing {}", activeImage()->srcFilename);
         anaPopTrig = true;
 
-    std::thread analyzeThread([this]{
-        if (!activeImage()->blurImgData)
-            activeImage()->allocBlurBuf();
-        activeImage()->blurImage();
-        activeImage()->processMinMax(dispOCIO);
+    image* analyzedImage = activeImage();
+    const bool robust = appPrefs.prefs.robustAnalysis;
+    const auto analysisOCIO = dispOCIO;
+    std::thread analyzeThread([this, analyzedImage, robust, analysisOCIO]{
+        if (robust) {
+            if (!analyzedImage->processRobustAnalysis(analysisOCIO)) {
+                std::strcpy(ackMsg, "Cannot analyze this region. Select a larger area with tonal detail and a valid film base.");
+                ackPopTrig = true;
+                anaPopTrig = false;
+                return;
+            }
+        } else {
+            if (!analyzedImage->blurImgData)
+                analyzedImage->allocBlurBuf();
+            analyzedImage->blurImage();
+            analyzedImage->processMinMax(analysisOCIO);
+            analyzedImage->delBlurBuf();
+        }
         if (appPrefs.prefs.cmykSliders)
-            activeImage()->imgParam.rgb_to_cmyk();
-        anaPopTrig = false;
-        activeImage()->needMetaWrite = true;
+            analyzedImage->imgParam.rgb_to_cmyk();
+        analyzedImage->needMetaWrite = true;
         metaRefresh = true;
-        activeImage()->delBlurBuf();
-        activeImage()->renderBypass = false;
-        imgRender();
+        analyzedImage->renderBypass = false;
+        imgRender(analyzedImage, r_sdt);
+        anaPopTrig = false;
     });
 
     analyzeThread.detach();

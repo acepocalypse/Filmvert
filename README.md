@@ -40,6 +40,10 @@ The engine will process the image, setting the white point and black point based
 
 The "Analysis Bias" slider can be adjusted, and the image re-analyzed to tweak the results of the analysis.
 
+Enable **Robust Analysis** in the existing Analysis panel for a fast, optional alternative. It samples a bounded grid inside the four-corner region, rejects small outliers with median samples, and estimates tone bounds independently from neutral-color candidates. Click **Analyze** to apply it. Film-base sampling is still required, and Analysis Bias is disabled in this mode.
+
+Robust Analysis keeps the same saved black/white-point parameters and adds no processing during slider edits. Disable it to use the original blur-based analysis. Its color estimates are a starting point; adjust white balance and tone to suit the scan. Flat or empty regions leave the existing conversion unchanged.
+
 ### Image Adjustments
 Depending upon the results of the analysis, the **Analyzed White Point** and **Analyzed Black Point** can be adjusted to taste.
 

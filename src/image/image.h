@@ -177,6 +177,7 @@ struct image {
     void processBaseColor();
     void blurImage();
     void processMinMax(ocioSetting ocioSet);
+    bool processRobustAnalysis(ocioSetting ocioSet);
     void setMinMax(ocioSetting ocioSet);
     void calcProxyDim();
     void resizeProxy();

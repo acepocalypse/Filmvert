@@ -69,6 +69,7 @@ struct preferenceSet {
 
     // Analysis Minimum Offset
     float minOffset = 0.002f;
+    bool robustAnalysis = false;
 
     // Performance Mode
     bool perfMode = true;
@@ -130,7 +131,7 @@ struct preferenceSet {
         viewerSetting, pixelScale, perfMode, maxRes, rollTimeout, debayerMode, maxSimExports,
         ocioPath, ocioExt, gamutComp, showStats, altGrades, cmykSliders, colorPicker,
         autoSort, proxyRes, renderTimeout, contactSheetBorder, verString, cpuRender,
-        minOffset, imageBGColor, paramBGColor, thumbBGColor, holdFilesinRAM, cropPresets,
+        minOffset, robustAnalysis, imageBGColor, paramBGColor, thumbBGColor, holdFilesinRAM, cropPresets,
         clickThrough, lastCheck, lastFound);
 };
 

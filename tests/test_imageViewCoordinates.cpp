@@ -6,6 +6,136 @@
 using Catch::Matchers::WithinAbs;
 using namespace imageViewCoordinates;
 
+TEST_CASE("Apply Crop replaces the analysis zone with the crop bounds", "[viewer][crop][analysis]") {
+    for (int rotation = 1; rotation <= 8; ++rotation) {
+        for (float angle : {0.0f, 15.0f, -15.0f}) {
+            CAPTURE(rotation, angle);
+            imageParams params;
+            params.cropEnable = true;
+            params.rotation = rotation;
+            params.arbitraryRotation = angle;
+            params.imageCropMinX = 0.3f;
+            params.imageCropMaxX = 0.7f;
+            params.imageCropMinY = 0.25f;
+            params.imageCropMaxY = 0.65f;
+            // A custom zone wholly inside the crop must expand with it too.
+            for (int i = 0; i < 4; ++i) {
+                params.cropBoxX[i] = 0.45f;
+                params.cropBoxY[i] = 0.45f;
+            }
+            alignAnalysisRegionToCrop(params, 1.5f);
+            const Point corners[] = {{0.0f, 0.0f}, {1.0f, 0.0f},
+                                     {1.0f, 1.0f}, {0.0f, 1.0f}};
+            for (int i = 0; i < 4; ++i) {
+                Point view;
+                REQUIRE(sourceToViewUnclipped({params.cropBoxX[i], params.cropBoxY[i]},
+                                             params, 1.5f, view));
+                const Point expected = orient(corners[i], rotation);
+                CHECK_THAT(view.x, WithinAbs(expected.x, 1e-6f));
+                CHECK_THAT(view.y, WithinAbs(expected.y, 1e-6f));
+            }
+            CHECK_FALSE(fitAnalysisRegionToView(params, 1.5f));
+        }
+    }
+}
+
+TEST_CASE("Post-crop analysis corners match their displayed handles before dragging", "[viewer][crop][analysis][drag]") {
+    for (int rotation = 1; rotation <= 8; ++rotation) {
+        CAPTURE(rotation);
+        imageParams params;
+        params.cropEnable = true;
+        params.rotation = rotation;
+        params.imageCropMinX = params.imageCropMinY = 0.2f;
+        params.imageCropMaxX = params.imageCropMaxY = 0.8f;
+        // Reproduce the screenshot: three original corners lie outside the
+        // crop and the bottom-right corner has been pulled into the image.
+        const std::array<Point, 4> original = {{{0.1f, 0.1f}, {0.9f, 0.1f},
+                                               {0.764f, 0.608f}, {0.1f, 0.9f}}};
+        for (int i = 0; i < 4; ++i) {
+            params.cropBoxX[i] = original[i].x;
+            params.cropBoxY[i] = original[i].y;
+        }
+        REQUIRE(fitAnalysisRegionToView(params, 1.0f));
+        const std::array<Point, 4> expected = {{{0.0f, 0.0f}, {1.0f, 0.0f},
+                                               {0.94f, 0.68f}, {0.0f, 1.0f}}};
+        std::vector<Point> outline;
+        for (int i = 0; i < 4; ++i) {
+            Point view;
+            REQUIRE(sourceToViewUnclipped({params.cropBoxX[i], params.cropBoxY[i]}, params, 1.0f, view));
+            const Point handle = orient(expected[i], rotation);
+            CHECK_THAT(view.x, WithinAbs(handle.x, 1e-6f));
+            CHECK_THAT(view.y, WithinAbs(handle.y, 1e-6f));
+            const auto source = viewToSource(view, params, 1.0f);
+            CHECK_THAT(source.x, WithinAbs(params.cropBoxX[i], 1e-6f));
+            CHECK_THAT(source.y, WithinAbs(params.cropBoxY[i], 1e-6f));
+            outline.push_back(view);
+        }
+        // No hidden fifth corner can form the extra bend along the bottom.
+        CHECK(clipPolygonToView(outline).size() == 4);
+        CHECK_FALSE(fitAnalysisRegionToView(params, 1.0f));
+    }
+}
+
+TEST_CASE("Analysis corners fit rotated crops without drifting on subsequent frames", "[viewer][crop][analysis][drag]") {
+    imageParams params;
+    params.cropEnable = true;
+    params.imageCropMinX = params.imageCropMinY = 0.3f;
+    params.imageCropMaxX = params.imageCropMaxY = 0.7f;
+    params.arbitraryRotation = 15.0f;
+    const std::array<Point, 4> corners = {{{0.1f, 0.1f}, {0.9f, 0.1f},
+                                          {0.9f, 0.9f}, {0.1f, 0.9f}}};
+    for (int i = 0; i < 4; ++i) {
+        params.cropBoxX[i] = corners[i].x;
+        params.cropBoxY[i] = corners[i].y;
+    }
+    REQUIRE(fitAnalysisRegionToView(params, 1.5f));
+    for (int i = 0; i < 4; ++i) {
+        Point view;
+        REQUIRE(sourceToViewUnclipped({params.cropBoxX[i], params.cropBoxY[i]}, params, 1.5f, view));
+        CHECK(view.x >= -1e-6f);
+        CHECK(view.x <= 1.0f + 1e-6f);
+        CHECK(view.y >= -1e-6f);
+        CHECK(view.y <= 1.0f + 1e-6f);
+    }
+    CHECK_FALSE(fitAnalysisRegionToView(params, 1.5f));
+}
+
+TEST_CASE("Analysis corner dragging follows valid motion without moving other corners", "[viewer][analysis][drag]") {
+    const std::array<Point, 4> corners = {{{0.1f, 0.1f}, {0.9f, 0.1f},
+                                          {0.9f, 0.9f}, {0.1f, 0.9f}}};
+    const auto moved = constrainAnalysisCorner(corners, 0, {0.3f, 0.2f});
+    CHECK_THAT(moved.x, WithinAbs(0.3f, 1e-6f));
+    CHECK_THAT(moved.y, WithinAbs(0.2f, 1e-6f));
+    CHECK(corners[1].x == 0.9f);
+    CHECK(corners[1].y == 0.1f);
+    const auto edge = constrainAnalysisCorner(corners, 0, {-0.2f, -0.4f});
+    CHECK(edge.x == 0.0f);
+    CHECK(edge.y == 0.0f);
+}
+
+TEST_CASE("Analysis corners stop before folding or crossing the outline", "[viewer][analysis][drag]") {
+    for (bool reversed : {false, true}) {
+        std::array<Point, 4> corners = {{{0.1f, 0.1f}, {0.9f, 0.1f},
+                                        {0.9f, 0.9f}, {0.1f, 0.9f}}};
+        if (reversed) std::reverse(corners.begin(), corners.end());
+        for (int corner = 0; corner < 4; ++corner) {
+            CAPTURE(reversed, corner);
+            auto polygon = corners;
+            polygon[corner] = constrainAnalysisCorner(corners, corner, corners[(corner + 2) % 4]);
+            // The corner moves toward the pointer but stops before the opposite diagonal.
+            CHECK_THAT(polygon[corner].x, WithinAbs(0.5f, 1e-5f));
+            CHECK_THAT(polygon[corner].y, WithinAbs(0.5f, 1e-5f));
+            for (int i = 0; i < 4; ++i) {
+                const auto a = polygon[i], b = polygon[(i + 1) % 4], c = polygon[(i + 2) % 4];
+                const float turn = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+                CHECK(turn * (reversed ? -1.0f : 1.0f) > 0.0f);
+            }
+            const auto outline = clipPolygonToView({polygon.begin(), polygon.end()});
+            CHECK(outline.size() == 4);
+        }
+    }
+}
+
 TEST_CASE("Applied crops retain visible min/max positions", "[viewer][crop]") {
     imageParams params;
     params.cropEnable = true;

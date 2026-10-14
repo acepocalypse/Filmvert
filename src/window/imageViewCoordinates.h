@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -10,6 +11,47 @@ struct Point {
     float x;
     float y;
 };
+
+// Keep the four analysis corners in perimeter order. A freely dragged corner
+// can otherwise turn the region into a concave or self-intersecting polygon.
+inline Point constrainAnalysisCorner(const std::array<Point, 4>& corners,
+                                     int corner, Point target) {
+    if (corner < 0 || corner >= 4) return target;
+    target.x = std::clamp(target.x, 0.0f, 1.0f);
+    target.y = std::clamp(target.y, 0.0f, 1.0f);
+    float area = 0.0f;
+    for (int i = 0; i < 4; ++i) {
+        const auto a = corners[i], b = corners[(i + 1) % 4];
+        area += a.x * b.y - a.y * b.x;
+    }
+    const float winding = area >= 0.0f ? 1.0f : -1.0f;
+    auto valid = [&](Point candidate) {
+        auto polygon = corners;
+        polygon[corner] = candidate;
+        for (int i = 0; i < 4; ++i) {
+            const auto a = polygon[i], b = polygon[(i + 1) % 4],
+                       c = polygon[(i + 2) % 4];
+            const float turn = (b.x - a.x) * (c.y - b.y) -
+                               (b.y - a.y) * (c.x - b.x);
+            if (!std::isfinite(turn) || turn * winding <= 1e-6f) return false;
+        }
+        return true;
+    };
+    if (valid(target)) return target;
+    const Point start = corners[corner];
+    if (!valid(start)) return start;
+    // Stop at the nearest edge rather than rejecting the entire mouse motion.
+    float low = 0.0f, high = 1.0f;
+    for (int i = 0; i < 24; ++i) {
+        const float t = (low + high) * 0.5f;
+        const Point p = {start.x + t * (target.x - start.x),
+                         start.y + t * (target.y - start.y)};
+        if (valid(p)) low = t;
+        else high = t;
+    }
+    return {start.x + low * (target.x - start.x),
+            start.y + low * (target.y - start.y)};
+}
 
 // Normalized coordinates, using the same EXIF orientation as the viewer quad.
 inline Point orient(Point p, int rotation) {
@@ -99,5 +141,51 @@ Point viewToSource(Point view, const Params& params, float aspect) {
     }
     // Rotated crops may include background outside the source image.
     return {std::clamp(p.x, 0.0f, 1.0f), std::clamp(p.y, 0.0f, 1.0f)};
+}
+
+// Applying a crop makes its bounds the new analysis region. Store source
+// coordinates so analysis samples the same pixels as the displayed crop.
+template <typename Params>
+void alignAnalysisRegionToCrop(Params& params, float aspect) {
+    if (!params.cropEnable) return;
+    const Point corners[] = {{params.imageCropMinX, params.imageCropMinY},
+                             {params.imageCropMaxX, params.imageCropMinY},
+                             {params.imageCropMaxX, params.imageCropMaxY},
+                             {params.imageCropMinX, params.imageCropMaxY}};
+    for (int i = 0; i < 4; ++i) {
+        const Point source = rotate(corners[i], params.arbitraryRotation, aspect);
+        params.cropBoxX[i] = std::clamp(source.x, 0.0f, 1.0f);
+        params.cropBoxY[i] = std::clamp(source.y, 0.0f, 1.0f);
+    }
+}
+
+// After applying a crop, the editable corners must be the actual source
+// positions represented by the visible handles, rather than hidden points
+// outside the crop with independently clamped handles.
+template <typename Params>
+bool fitAnalysisRegionToView(Params& params, float aspect) {
+    if (!params.cropEnable) return false;
+    std::array<Point, 4> fitted;
+    bool changed = false;
+    for (int i = 0; i < 4; ++i) {
+        Point view;
+        const Point source = {params.cropBoxX[i], params.cropBoxY[i]};
+        if (!sourceToViewUnclipped(source, params, aspect, view)) return false;
+        // Avoid repeatedly rewriting points for floating-point roundoff.
+        if (view.x < -1e-5f || view.x > 1.0f + 1e-5f ||
+            view.y < -1e-5f || view.y > 1.0f + 1e-5f) {
+            fitted[i] = viewToSource(view, params, aspect);
+            changed = true;
+        } else {
+            fitted[i] = source;
+        }
+    }
+    if (changed) {
+        for (int i = 0; i < 4; ++i) {
+            params.cropBoxX[i] = fitted[i].x;
+            params.cropBoxY[i] = fitted[i].y;
+        }
+    }
+    return changed;
 }
 } // namespace imageViewCoordinates

@@ -235,6 +235,12 @@ void mainWindow::imageView() {
         static bool dragging = false;
         static bool minDrag = false;
         static bool maxDrag = false;
+        static imageViewCoordinates::Point cornerGrabOffset = {};
+        if (imageChanged || rotationChanged) {
+            dragging = false;
+            draggedCorner = -1;
+            minDrag = maxDrag = false;
+        }
 
         // Use the displayed rectangle for both analysis and min/max overlays.
         auto viewToScreen = [&](imageViewCoordinates::Point view) {
@@ -263,29 +269,32 @@ void mainWindow::imageView() {
         ImVec2 cropBoxScreen[4] = {};
         bool analysisVisible = false;
 
+        if (!cropVisible && dispSizeValid && !dragging &&
+                imageViewCoordinates::fitAnalysisRegionToView(
+                    activeImage()->imgParam, (float)activeImage()->width / activeImage()->height)) {
+            activeImage()->needMetaWrite = true;
+        }
         if (cropDisplay && !cropVisible && dispSizeValid) {
-            std::vector<imageViewCoordinates::Point> corners;
+            int cornerCount = 0;
             for (int i = 0; i < 4; ++i) {
                 imageViewCoordinates::Point view;
                 if (!imageViewCoordinates::sourceToViewUnclipped(
                         {activeImage()->imgParam.cropBoxX[i], activeImage()->imgParam.cropBoxY[i]},
                         activeImage()->imgParam, (float)activeImage()->width / activeImage()->height, view))
                     break;
-                corners.push_back(view);
-                // Keep off-crop corner handles at the image edge so a region
-                // larger than the crop can still be adjusted from this view.
-                cropBoxScreen[i] = viewToScreen({std::clamp(view.x, 0.0f, 1.0f),
-                                               std::clamp(view.y, 0.0f, 1.0f)});
+                cropBoxScreen[i] = viewToScreen(view);
+                ++cornerCount;
             }
-            if (corners.size() == 4) {
-                const auto outline = imageViewCoordinates::clipPolygonToView(corners);
-                analysisVisible = outline.size() >= 3;
-                if (analysisVisible) {
-                    for (size_t i = 0; i < outline.size(); ++i)
-                        drawList->AddLine(viewToScreen(outline[i]),
-                            viewToScreen(outline[(i + 1) % outline.size()]),
-                            IM_COL32(255, 255, 0, 255), 2.0f);
-                }
+            analysisVisible = cornerCount == 4;
+            if (analysisVisible) {
+                // Clip line pixels, not the polygon: polygon clipping creates
+                // extra vertices and boundary segments unrelated to the handles.
+                drawList->PushClipRect(imagePos,
+                    ImVec2(imagePos.x + dispSize.x, imagePos.y + dispSize.y), true);
+                for (int i = 0; i < 4; ++i)
+                    drawList->AddLine(cropBoxScreen[i], cropBoxScreen[(i + 1) % 4],
+                        IM_COL32(255, 255, 0, 255), 2.0f);
+                drawList->PopClipRect();
             }
         }
 
@@ -302,6 +311,10 @@ void mainWindow::imageView() {
                     !dragging && !minDrag && !maxDrag) {
                     draggedCorner = i;
                     dragging = true;
+                    const auto mousePoint = screenToPoint(mousePos);
+                    cornerGrabOffset = {
+                        mousePoint.x - activeImage()->imgParam.cropBoxX[i],
+                        mousePoint.y - activeImage()->imgParam.cropBoxY[i]};
                     currentlyInteracting = true;
                 }
             }
@@ -337,7 +350,14 @@ void mainWindow::imageView() {
         if (dragging && draggedCorner >= 0) {
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-                    const auto point = screenToPoint(ImGui::GetIO().MousePos);
+                    auto point = screenToPoint(ImGui::GetIO().MousePos);
+                    point.x -= cornerGrabOffset.x;
+                    point.y -= cornerGrabOffset.y;
+                    std::array<imageViewCoordinates::Point, 4> corners;
+                    for (int i = 0; i < 4; ++i)
+                        corners[i] = {activeImage()->imgParam.cropBoxX[i],
+                                      activeImage()->imgParam.cropBoxY[i]};
+                    point = imageViewCoordinates::constrainAnalysisCorner(corners, draggedCorner, point);
                     activeImage()->imgParam.cropBoxX[draggedCorner] = point.x;
                     activeImage()->imgParam.cropBoxY[draggedCorner] = point.y;
                 }

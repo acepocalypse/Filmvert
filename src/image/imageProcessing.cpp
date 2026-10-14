@@ -6,6 +6,7 @@
 #include "renderParams.h"
 #include "utils.h"
 #include "lancir.h"
+#include "robustAnalysis.h"
 #include <string>
 
 //---Process Base Color---//
@@ -231,6 +232,23 @@ void image::processMinMax(ocioSetting ocioSet) {
     LOG_INFO("Max Pixel: {},{}", imgParam.maxX, imgParam.maxY);
     LOG_INFO("Max Values: {}, {}, {}", imgParam.whitePoint[0], imgParam.whitePoint[1], imgParam.whitePoint[2]);
     LOG_INFO("Max Value Chrominance: {}", maxSat);
+}
+
+bool image::processRobustAnalysis(ocioSetting ocioSet) {
+    const auto result = robustAnalysis::analyze(rawImgData, width, height,
+        imgParam.baseColor, imgParam.cropBoxX, imgParam.cropBoxY);
+    if (!result.valid) return false;
+    float zeroPix[4] = {appPrefs.prefs.minOffset, appPrefs.prefs.minOffset, appPrefs.prefs.minOffset, 1.0f};
+    ocioSet.inverse = true;
+    ocioProc.processImage(zeroPix, 1, 1, ocioSet);
+    for (int ch = 0; ch < 3; ++ch) {
+        imgParam.blackPoint[ch] = result.black[ch] - zeroPix[ch];
+        imgParam.whitePoint[ch] = result.white[ch];
+    }
+    imgParam.minX = result.minX; imgParam.minY = result.minY;
+    imgParam.maxX = result.maxX; imgParam.maxY = result.maxY;
+    LOG_INFO("Robust analysis finished for {} ({} samples)", srcFilename, result.sampleCount);
+    return true;
 }
 
 //--- Set MinMax ---//

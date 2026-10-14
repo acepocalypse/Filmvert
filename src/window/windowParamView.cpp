@@ -2,6 +2,7 @@
 #include "structs.h"
 #include "window.h"
 #include "windowUtils.h"
+#include "imageViewCoordinates.h"
 #include "osMacros.h"
 #include <imgui.h>
 #include <algorithm>
@@ -128,6 +129,8 @@ void mainWindow::paramView() {
                             ImGui::SameLine();
                             if (ImGui::Button("Apply Crop", ImVec2(applyCropW, 0))) {
                                 paramChange |= true; cropVisible = false; activeImage()->imgParam.cropEnable = true; firstImage = true;
+                                imageViewCoordinates::alignAnalysisRegionToCrop(activeImage()->imgParam,
+                                    (float)activeImage()->width / activeImage()->height);
                             }
                             ImGui::SameLine();
                             if (ImGui::Button("Reset Crop", ImVec2(rstCropW, 0))) {
@@ -290,6 +293,9 @@ void mainWindow::paramView() {
                         ImGui::SetItemTooltip("Hold " FV_MOD_C " + shift, click and drag an area in the image\nto sample the film base color.");
                         ImGui::SameLine();
                         if(ImGui::Button("Reset##a1")){activeImage()->imgParam.rstBC(); paramChange |= true;}
+                        uiChanges |= ImGui::Checkbox("Robust Analysis", &appPrefs.prefs.robustAnalysis);
+                        ImGui::SetItemTooltip("Use fast median samples and percentile bounds, with neutral color estimates.\nApplies when you click Analyze. Disable for the original blur-based analysis.");
+                        ImGui::BeginDisabled(appPrefs.prefs.robustAnalysis);
                         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (sliderPx - ImGui::CalcTextSize("Analysis Bias").x) * 0.5f);
                         ImGui::Text("Analysis Bias");
                         ImGui::SetNextItemWidth(sliderW);
@@ -297,6 +303,7 @@ void mainWindow::paramView() {
                         ImGui::SetItemTooltip("The amount of blur to apply to the image before analyzing.\nThis smooths out extreme pixel values for \na more ideal analysis.");
                         ImGui::SameLine();
                         if(ImGui::Button("Reset##a2")){activeImage()->imgParam.rstBLR();}
+                        ImGui::EndDisabled();
                         ImGui::Spacing();
                         ImGui::Spacing();
                         ImGui::Separator();
@@ -339,7 +346,7 @@ void mainWindow::paramView() {
                         ImGui::Dummy(ImVec2(availW * 0.05f, 0));
                         ImGui::SameLine();
                         ImGui::Checkbox("Show Points", &minMaxDisp);
-                        ImGui::SetItemTooltip("Display the detected min/max luma points in the image\nused to sample the analyzed black point and white point.");
+                        ImGui::SetItemTooltip("Display black/white point sample positions.\nDrag a point to manually override that endpoint.");
                         ImGui::Spacing();
                         //ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availW - (totalW + resetW)) * 0.5f);
                         if (ImGui::Button("Analyze")) {

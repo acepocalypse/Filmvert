@@ -2,11 +2,184 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <cmath>
 #include <vector>
+#include <chrono>
+#include <iostream>
+#include <limits>
+#include "robustAnalysis.h"
+#include "window/imageViewCoordinates.h"
+#include "preferences.h"
 #include "image.h"         // float4
 #include "renderParams.h"  // renderParams, CURVE_MAX_PTS
 
 using Catch::Matchers::WithinAbs;
 using Catch::Matchers::WithinRel;
+
+namespace {
+std::vector<float> negativeRamp(unsigned w, unsigned h) {
+    std::vector<float> pixels(static_cast<std::size_t>(w) * h * 4, 1.0f);
+    for (unsigned y = 0; y < h; ++y)
+        for (unsigned x = 0; x < w; ++x)
+            for (int ch = 0; ch < 3; ++ch)
+                pixels[(static_cast<std::size_t>(y) * w + x) * 4 + ch] = 0.1f / (0.1f + 0.9f * x / (w - 1));
+    return pixels;
+}
+robustAnalysis::Result meter(const std::vector<float>& pixels, unsigned w, unsigned h,
+                             const imageParams& params) {
+    const float base[] = {1, 1, 1};
+    return robustAnalysis::analyze(pixels.data(), w, h, base, params.cropBoxX, params.cropBoxY);
+}
+imageParams fullAnalysisRegion() {
+    imageParams params;
+    const float x[] = {0, 1, 1, 0}, y[] = {0, 0, 1, 1};
+    std::copy(x, x + 4, params.cropBoxX);
+    std::copy(y, y + 4, params.cropBoxY);
+    return params;
+}
+}
+
+TEST_CASE("Robust analysis ignores sparse dust and preserves grayscale neutrality", "[robust]") {
+    auto pixels = negativeRamp(256, 256);
+    const auto params = fullAnalysisRegion();
+    const auto clean = meter(pixels, 256, 256, params);
+    REQUIRE(clean.valid);
+    for (std::size_t i = 37; i < pixels.size() / 4; i += 997)
+        for (int ch = 0; ch < 3; ++ch) pixels[i * 4 + ch] = 0;
+    const auto dusty = meter(pixels, 256, 256, params);
+    REQUIRE(dusty.valid);
+    for (int ch = 0; ch < 3; ++ch) {
+        CHECK_THAT(dusty.black[ch], WithinAbs(clean.black[ch], 0.01f));
+        CHECK_THAT(dusty.white[ch], WithinAbs(clean.white[ch], 0.01f));
+        CHECK_THAT(dusty.white[ch], WithinAbs(dusty.white[0], 1e-6f));
+    }
+}
+
+TEST_CASE("Robust neutral color estimates do not inherit a saturated highlight", "[robust]") {
+    auto pixels = negativeRamp(256, 128);
+    for (unsigned y = 0; y < 128; ++y)
+        for (unsigned x = 248; x < 256; ++x) {
+            auto* pixel = pixels.data() + (y * 256 + x) * 4;
+            pixel[0] = 0.1f / 4.0f;
+            pixel[1] = pixel[2] = 1.0f;
+        }
+    const auto result = meter(pixels, 256, 128, fullAnalysisRegion());
+    REQUIRE(result.valid);
+    CHECK_THAT(result.white[0], WithinAbs(result.white[1], 1e-6f));
+    CHECK_THAT(result.white[1], WithinAbs(result.white[2], 1e-6f));
+    CHECK(result.white[0] > 1.0f); // Retains the independently metered highlight brightness.
+}
+
+TEST_CASE("Robust metering follows the applied crop and excludes its surround", "[robust][viewer]") {
+    auto pixels = negativeRamp(256, 128);
+    auto params = fullAnalysisRegion();
+    params.cropEnable = true;
+    params.imageCropMaxX = 0.5f;
+    REQUIRE(imageViewCoordinates::fitAnalysisRegionToView(params, 2.0f));
+    const auto result = meter(pixels, 256, 128, params);
+    REQUIRE(result.valid);
+    CHECK(result.white[0] < 0.56f);
+    for (unsigned y = 0; y < 128; ++y)
+        for (unsigned x = 128; x < 256; ++x)
+            for (int ch = 0; ch < 3; ++ch) pixels[(y * 256 + x) * 4 + ch] = 0.0f;
+    const auto surrounded = meter(pixels, 256, 128, params);
+    REQUIRE(surrounded.valid);
+    CHECK_THAT(surrounded.white[0], WithinAbs(result.white[0], 1e-6f));
+    CHECK(result.minX < 0.5f);
+    CHECK(result.maxX < 0.5f);
+}
+
+TEST_CASE("Robust analysis rejects empty, flat and non-finite regions", "[robust]") {
+    auto params = fullAnalysisRegion();
+    auto pixels = negativeRamp(32, 32);
+    std::fill(pixels.begin(), pixels.end(), 0.5f);
+    CHECK_FALSE(meter(pixels, 32, 32, params).valid);
+    std::fill(pixels.begin(), pixels.end(), std::numeric_limits<float>::quiet_NaN());
+    CHECK_FALSE(meter(pixels, 32, 32, params).valid);
+    std::fill(params.cropBoxX, params.cropBoxX + 4, 0.5f);
+    CHECK_FALSE(meter(pixels, 32, 32, params).valid);
+    const float base[] = {1, 1, 1};
+    CHECK_FALSE(robustAnalysis::analyze(nullptr, 32, 32, base, params.cropBoxX, params.cropBoxY).valid);
+}
+
+TEST_CASE("Robust analysis respects a skewed region rather than its bounding rectangle", "[robust]") {
+    auto pixels = negativeRamp(128, 128);
+    auto params = fullAnalysisRegion();
+    const float x[] = {0.5f, 1.0f, 0.5f, 0.0f}, y[] = {0.0f, 0.5f, 1.0f, 0.5f};
+    std::copy(x, x + 4, params.cropBoxX);
+    std::copy(y, y + 4, params.cropBoxY);
+    const auto clean = meter(pixels, 128, 128, params);
+    REQUIRE(clean.valid);
+    for (unsigned row = 0; row < 128; ++row)
+        for (unsigned col = 0; col < 128; ++col)
+            if (!robustAnalysis::contains((col + 0.5f) / 128, (row + 0.5f) / 128, x, y))
+                for (int ch = 0; ch < 3; ++ch) pixels[(row * 128 + col) * 4 + ch] = 0.0f;
+    const auto surrounded = meter(pixels, 128, 128, params);
+    REQUIRE(surrounded.valid);
+    CHECK_THAT(surrounded.black[0], WithinAbs(clean.black[0], 1e-6f));
+    CHECK_THAT(surrounded.white[0], WithinAbs(clean.white[0], 1e-6f));
+}
+
+TEST_CASE("Robust analysis uses the sampled film base in the existing inversion space", "[robust]") {
+    auto pixels = negativeRamp(128, 128);
+    const auto params = fullAnalysisRegion();
+    const float base[] = {0.8f, 0.5f, 0.3f};
+    for (std::size_t i = 0; i < pixels.size() / 4; ++i)
+        for (int ch = 0; ch < 3; ++ch) pixels[i * 4 + ch] *= base[ch];
+    const auto result = robustAnalysis::analyze(pixels.data(), 128, 128, base, params.cropBoxX, params.cropBoxY);
+    REQUIRE(result.valid);
+    for (int ch = 1; ch < 3; ++ch) {
+        CHECK_THAT(result.black[ch], WithinAbs(result.black[0], 1e-6f));
+        CHECK_THAT(result.white[ch], WithinAbs(result.white[0], 1e-6f));
+    }
+    const float badBase[] = {0, 0.5f, 0.3f};
+    CHECK_FALSE(robustAnalysis::analyze(pixels.data(), 128, 128, badBase, params.cropBoxX, params.cropBoxY).valid);
+}
+
+TEST_CASE("Robust sampling stays bounded and stable across scan resolutions", "[robust]") {
+    const auto params = fullAnalysisRegion();
+    const auto preview = meter(negativeRamp(320, 240), 320, 240, params);
+    const auto full = meter(negativeRamp(1280, 960), 1280, 960, params);
+    REQUIRE(preview.valid);
+    REQUIRE(full.valid);
+    CHECK(full.sampleCount <= 128 * 128);
+    CHECK(full.sampleCount == preview.sampleCount);
+    CHECK_THAT(full.black[0], WithinAbs(preview.black[0], 0.005f));
+    CHECK_THAT(full.white[0], WithinAbs(preview.white[0], 0.005f));
+}
+
+TEST_CASE("Robust analysis preference round-trips and old preferences retain legacy analysis", "[robust]") {
+    preferenceSet prefs;
+    CHECK_FALSE(prefs.robustAnalysis);
+    prefs.robustAnalysis = true;
+    nlohmann::json saved = prefs;
+    CHECK(saved.get<preferenceSet>().robustAnalysis);
+    saved.erase("robustAnalysis");
+    CHECK_FALSE(saved.get<preferenceSet>().robustAnalysis);
+}
+
+TEST_CASE("Compare robust analysis with the existing full-frame blur", "[robust-benchmark][.]") {
+    auto pixels = negativeRamp(3000, 2000);
+    const auto params = fullAnalysisRegion();
+    using Clock = std::chrono::steady_clock;
+    const auto start = Clock::now();
+    const auto result = meter(pixels, 3000, 2000, params);
+    const auto robustEnd = Clock::now();
+    REQUIRE(result.valid);
+    image img;
+    img.width = img.rndrW = 3000;
+    img.height = img.rndrH = 2000;
+    img.nChannels = 4;
+    img.rawImgData = pixels.data();
+    img.allocBlurBuf();
+    img.blurImage();
+    const auto legacyEnd = Clock::now();
+    img.delBlurBuf();
+    img.rawImgData = nullptr;
+    std::cout << "3000x2000 analysis: robust "
+              << std::chrono::duration<double, std::milli>(robustEnd - start).count()
+              << " ms; legacy blur alone "
+              << std::chrono::duration<double, std::milli>(legacyEnd - robustEnd).count()
+              << " ms; samples " << result.sampleCount << '\n';
+}
 
 // Forward declarations — these functions are defined in imageProcessing.cpp
 // which is compiled into the test binary via IMAGE_SRCS.
