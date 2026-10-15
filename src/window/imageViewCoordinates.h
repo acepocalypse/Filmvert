@@ -143,20 +143,37 @@ Point viewToSource(Point view, const Params& params, float aspect) {
     return {std::clamp(p.x, 0.0f, 1.0f), std::clamp(p.y, 0.0f, 1.0f)};
 }
 
-// Applying a crop makes its bounds the new analysis region. Store source
-// coordinates so analysis samples the same pixels as the displayed crop.
+// Follow the applied crop at full width, excluding a small border at the
+// displayed top and bottom. Store source coordinates for the sampled pixels.
 template <typename Params>
 void alignAnalysisRegionToCrop(Params& params, float aspect) {
     if (!params.cropEnable) return;
-    const Point corners[] = {{params.imageCropMinX, params.imageCropMinY},
-                             {params.imageCropMaxX, params.imageCropMinY},
-                             {params.imageCropMaxX, params.imageCropMaxY},
-                             {params.imageCropMinX, params.imageCropMaxY}};
+    constexpr float borderInset = 0.02f;
+    const Point corners[] = {{0.0f, 0.0f}, {1.0f, 0.0f},
+                             {1.0f, 1.0f}, {0.0f, 1.0f}};
     for (int i = 0; i < 4; ++i) {
-        const Point source = rotate(corners[i], params.arbitraryRotation, aspect);
-        params.cropBoxX[i] = std::clamp(source.x, 0.0f, 1.0f);
-        params.cropBoxY[i] = std::clamp(source.y, 0.0f, 1.0f);
+        Point view = orient(corners[i], params.rotation);
+        view.y = borderInset + view.y * (1.0f - 2.0f * borderInset);
+        const Point source = viewToSource(view, params, aspect);
+        params.cropBoxX[i] = source.x;
+        params.cropBoxY[i] = source.y;
     }
+}
+
+// Share normalized crop settings while preserving each image's orientation
+// and color adjustments. Recompute the analysis zone for its own dimensions.
+template <typename Params>
+void applyCropFrom(Params& target, const Params& source, float aspect) {
+    target.imageCropMinX = source.imageCropMinX;
+    target.imageCropMaxX = source.imageCropMaxX;
+    target.imageCropMinY = source.imageCropMinY;
+    target.imageCropMaxY = source.imageCropMaxY;
+    target.arbitraryRotation = source.arbitraryRotation;
+    target.imageCropAspect = source.imageCropAspect;
+    target.lockAspect = source.lockAspect;
+    target.cropEnable = true;
+    target.cropVisible = false;
+    alignAnalysisRegionToCrop(target, aspect);
 }
 
 // After applying a crop, the editable corners must be the actual source

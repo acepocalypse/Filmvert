@@ -6,6 +6,7 @@
 #include <iostream>
 #include <limits>
 #include "robustAnalysis.h"
+#include "autoCrop.h"
 #include "window/imageViewCoordinates.h"
 #include "preferences.h"
 #include "image.h"         // float4
@@ -13,6 +14,76 @@
 
 using Catch::Matchers::WithinAbs;
 using Catch::Matchers::WithinRel;
+
+TEST_CASE("Auto crop detects black scan borders at different sizes and brightness", "[autocrop]") {
+    for (const auto dimensions : {std::pair{320u, 200u}, std::pair{200u, 320u}, std::pair{1200u, 800u}}) {
+        for (float scale : {0.01f, 1.0f, 4.0f}) {
+            const auto [w, h] = dimensions;
+            CAPTURE(w, h, scale);
+            std::vector<float> pixels(static_cast<std::size_t>(w) * h * 4, 0.001f * scale);
+            const unsigned left = w / 25, right = w - w / 20;
+            const unsigned top = h / 30, bottom = h - h / 25;
+            for (unsigned y = top; y < bottom; ++y)
+                for (unsigned x = left; x < right; ++x) {
+                    const auto i = (static_cast<std::size_t>(y) * w + x) * 4;
+                    pixels[i] = 0.6f * scale;
+                    pixels[i + 1] = 0.3f * scale;
+                    pixels[i + 2] = 0.2f * scale;
+                }
+            // An isolated bright dust spot must not move the detected frame.
+            pixels[(static_cast<std::size_t>(h / 2) * w + 1) * 4] = scale;
+            const auto bounds = autoCrop::detect(pixels.data(), w, h);
+            REQUIRE(bounds);
+            CHECK(bounds->left >= static_cast<float>(left) / w);
+            CHECK(bounds->top >= static_cast<float>(top) / h);
+            CHECK(bounds->right <= static_cast<float>(right) / w);
+            CHECK(bounds->bottom <= static_cast<float>(bottom) / h);
+            CHECK_THAT(bounds->left, WithinAbs(static_cast<float>(left) / w, 0.012f));
+            CHECK_THAT(bounds->top, WithinAbs(static_cast<float>(top) / h, 0.012f));
+            CHECK_THAT(bounds->right, WithinAbs(static_cast<float>(right) / w, 0.012f));
+            CHECK_THAT(bounds->bottom, WithinAbs(static_cast<float>(bottom) / h, 0.012f));
+        }
+    }
+}
+
+TEST_CASE("Auto crop trims slightly tilted frame edges without retaining black pixels", "[autocrop]") {
+    constexpr unsigned w = 320, h = 200;
+    std::vector<float> pixels(w * h * 4, 0.0f);
+    for (unsigned y = 0; y < h; ++y)
+        for (unsigned x = 0; x < w; ++x)
+            if (x >= 10 + y / 50 && x < 310 - y / 60 &&
+                y >= 7 + x / 90 && y < 190 - x / 100)
+                for (unsigned ch = 0; ch < 3; ++ch)
+                    pixels[(y * w + x) * 4 + ch] = 0.5f;
+    const auto bounds = autoCrop::detect(pixels.data(), w, h);
+    REQUIRE(bounds);
+    bool containsBlack = false;
+    for (unsigned y = static_cast<unsigned>(bounds->top * h); y < static_cast<unsigned>(bounds->bottom * h); ++y)
+        for (unsigned x = static_cast<unsigned>(bounds->left * w); x < static_cast<unsigned>(bounds->right * w); ++x)
+            containsBlack |= pixels[(y * w + x) * 4] == 0.0f;
+    CHECK_FALSE(containsBlack);
+    CHECK(bounds->right - bounds->left > 0.88f);
+    CHECK(bounds->bottom - bounds->top > 0.86f);
+}
+
+TEST_CASE("Auto crop leaves borderless and uncertain scans unchanged", "[autocrop]") {
+    constexpr unsigned w = 160, h = 100;
+    std::vector<float> pixels(w * h * 4, 0.3f);
+    CHECK_FALSE(autoCrop::detect(pixels.data(), w, h));
+    std::fill(pixels.begin(), pixels.end(), 0.0f);
+    CHECK_FALSE(autoCrop::detect(pixels.data(), w, h));
+    std::fill(pixels.begin(), pixels.end(), std::numeric_limits<float>::quiet_NaN());
+    CHECK_FALSE(autoCrop::detect(pixels.data(), w, h));
+    CHECK_FALSE(autoCrop::detect(nullptr, w, h));
+    CHECK_FALSE(autoCrop::detect(pixels.data(), 0, h));
+    CHECK_FALSE(autoCrop::detect(pixels.data(), 16, 16));
+    // A border deeper than the search limit is deliberately ambiguous.
+    std::fill(pixels.begin(), pixels.end(), 0.0f);
+    for (unsigned y = 30; y < 70; ++y)
+        for (unsigned x = 50; x < 110; ++x)
+            pixels[(y * w + x) * 4] = 0.8f;
+    CHECK_FALSE(autoCrop::detect(pixels.data(), w, h));
+}
 
 namespace {
 std::vector<float> negativeRamp(unsigned w, unsigned h) {

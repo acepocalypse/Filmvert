@@ -3,6 +3,7 @@
 #include "window.h"
 #include "windowUtils.h"
 #include "imageViewCoordinates.h"
+#include "autoCrop.h"
 #include "osMacros.h"
 #include <imgui.h>
 #include <algorithm>
@@ -74,66 +75,48 @@ void mainWindow::paramView() {
                 ImGui::Unindent(childDedent);
                 ImGui::BeginChild("##child_geo", ImVec2(ImGui::GetContentRegionAvail().x - sideMargin, 0.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
                 {
-                    const float innerW   = ImGui::GetContentRegionAvail().x;
-                    const float sp       = ImGui::GetStyle().ItemSpacing.x;
-                    const float fp       = ImGui::GetStyle().FramePadding.x * 2.0f;
-                    const float rstW     = ImGui::CalcTextSize("Reset").x + fp;
-                    const float sliderW  = -(rstW + sp);
-                    const float sliderPx = innerW - rstW - sp;
+                    const float innerW = ImGui::GetContentRegionAvail().x;
+                    const float sp = ImGui::GetStyle().ItemSpacing.x;
+                    const float halfW = std::max(1.0f, (innerW - sp) * 0.5f);
+                    const float rstW = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+                    const float sliderW = -(rstW + sp);
 
-                    // — Rotate buttons, centered —
-                    const float rotLW  = ImGui::CalcTextSize("Rotate Left").x + fp;
-                    const float rotRW  = ImGui::CalcTextSize("Rotate Right").x + fp;
-                    ImGui::SetCursorPosX((innerW - rotLW - sp - rotRW) * 0.5f);
-                    if (ImGui::Button("Rotate Left", ImVec2(rotLW, 0))) {
-                        if (validIm()) { activeImage()->rotLeft(); renderCall = true; paramChange = true; activeRoll()->rollUpState(); }
+                    ImGui::SeparatorText("Orientation");
+                    if (ImGui::Button("Rotate Left", ImVec2(halfW, 0))) {
+                        activeImage()->rotLeft(); renderCall = true; paramChange = true; activeRoll()->rollUpState();
                     }
                     ImGui::SameLine();
-                    if (ImGui::Button("Rotate Right", ImVec2(rotRW, 0))) {
-                        if (validIm()) { activeImage()->rotRight(); renderCall = true; paramChange = true; activeRoll()->rollUpState(); }
+                    if (ImGui::Button("Rotate Right", ImVec2(halfW, 0))) {
+                        activeImage()->rotRight(); renderCall = true; paramChange = true; activeRoll()->rollUpState();
                     }
-
-                    // — Flip buttons, centered —
-                    const float flipVW = ImGui::CalcTextSize("Flip Vertically").x + fp;
-                    const float flipHW = ImGui::CalcTextSize("Flip Horizontally").x + fp;
-                    ImGui::SetCursorPosX((innerW - flipVW - sp - flipHW) * 0.5f);
-                    if (ImGui::Button("Flip Vertically", ImVec2(flipVW, 0))) {
-                        if (validIm()) { activeImage()->flipV(); renderCall = true; paramChange = true; activeRoll()->rollUpState(); }
+                    if (ImGui::Button("Flip Vertically", ImVec2(halfW, 0))) {
+                        activeImage()->flipV(); renderCall = true; paramChange = true; activeRoll()->rollUpState();
                     }
                     ImGui::SetItemTooltip("Flip the image vertically");
                     ImGui::SameLine();
-                    if (ImGui::Button("Flip Horizontally", ImVec2(flipHW, 0))) {
-                        if (validIm()) { activeImage()->flipH(); renderCall = true; paramChange = true; activeRoll()->rollUpState(); }
+                    if (ImGui::Button("Flip Horizontally", ImVec2(halfW, 0))) {
+                        activeImage()->flipH(); renderCall = true; paramChange = true; activeRoll()->rollUpState();
                     }
                     ImGui::SetItemTooltip("Flip the image horizontally");
 
-                    // — Crop controls —
                     if (validIm()) {
                         ImGui::Spacing();
+                        ImGui::SeparatorText("Crop");
                         if (activeImage()->imgParam.cropEnable) {
-                            // Crop applied — show "Show Crop" centered
-                            const float showCropW = ImGui::CalcTextSize("Show Crop").x + fp;
-                            ImGui::SetCursorPosX((innerW - showCropW) * 0.5f);
-                            if (ImGui::Button("Show Crop", ImVec2(showCropW, 0))) {
+                            if (ImGui::Button("Edit Crop", ImVec2(-1, 0))) {
                                 paramChange |= true; cropVisible = true; activeImage()->imgParam.cropEnable = false;
                             }
                         } else if (cropVisible) {
-                            // Crop overlay visible — Hide / Apply / Reset, centered
-                            const float hideCropW  = ImGui::CalcTextSize("Hide Crop").x + fp;
-                            const float applyCropW = ImGui::CalcTextSize("Apply Crop").x + fp;
-                            const float rstCropW   = ImGui::CalcTextSize("Reset Crop").x + fp;
-                            ImGui::SetCursorPosX((innerW - hideCropW - sp - applyCropW - sp - rstCropW) * 0.5f);
-                            if (ImGui::Button("Hide Crop", ImVec2(hideCropW, 0))) {
-                                paramChange |= true; cropVisible = false; activeImage()->imgParam.cropEnable = false;
-                            }
-                            ImGui::SameLine();
-                            if (ImGui::Button("Apply Crop", ImVec2(applyCropW, 0))) {
+                            if (ImGui::Button("Apply Crop", ImVec2(-1, 0))) {
                                 paramChange |= true; cropVisible = false; activeImage()->imgParam.cropEnable = true; firstImage = true;
                                 imageViewCoordinates::alignAnalysisRegionToCrop(activeImage()->imgParam,
                                     (float)activeImage()->width / activeImage()->height);
                             }
+                            if (ImGui::Button("Hide Crop", ImVec2(halfW, 0))) {
+                                paramChange = true; cropVisible = false; activeImage()->imgParam.cropEnable = false;
+                            }
                             ImGui::SameLine();
-                            if (ImGui::Button("Reset Crop", ImVec2(rstCropW, 0))) {
+                            if (ImGui::Button("Reset Crop", ImVec2(halfW, 0))) {
                                 paramChange |= true;
                                 activeImage()->imgParam.imageCropMinX = 0.0f;
                                 activeImage()->imgParam.imageCropMinY = 0.0f;
@@ -146,20 +129,13 @@ void mainWindow::paramView() {
                                     (float)activeImage()->height / activeImage()->width;
                             }
 
-                            // Rotation — centered label + drag + reset
                             ImGui::Spacing();
-                            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (sliderPx - ImGui::CalcTextSize("Rotation").x) * 0.5f);
-                            ImGui::Text("Rotation");
+                            ImGui::TextUnformatted("Straighten");
                             ImGui::SetNextItemWidth(sliderW);
                             paramChange |= ImGui::DragFloat("##ARot", &activeImage()->imgParam.arbitraryRotation, 0.01f, -45.0f, 45.0f);
                             ImGui::SameLine();
                             if (ImGui::Button("Reset##Rot")) {
-                                int rW = activeImage()->width, rH = activeImage()->height;
-                                int rRot = activeImage()->imgParam.rotation;
-                                if (rRot == 5 || rRot == 6 || rRot == 7 || rRot == 8) std::swap(rW, rH);
-                                activeImage()->imgParam.imageCropAspect = rW > rH
-                                    ? (float)rW / rH : (float)rH / rW;
-                                updateCrop = true;
+                                activeImage()->imgParam.arbitraryRotation = 0.0f;
                                 paramChange = true;
                             }
 
@@ -185,9 +161,7 @@ void mainWindow::paramView() {
                             if (activeImage()->imgParam.lockAspect) {
                                 ImGui::Spacing();
 
-                                // Aspect ratio — centered label + drag (fills width)
-                                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (sliderPx - ImGui::CalcTextSize("Aspect Ratio").x) * 0.5f);
-                                ImGui::Text("Aspect Ratio");
+                                ImGui::TextUnformatted("Aspect Ratio");
                                 ImGui::SetNextItemWidth(sliderW);
                                 if (ImGui::DragFloat("###asp", &activeImage()->imgParam.imageCropAspect, 0.01f, 0.1f, 10.0f)) {
                                     updateCrop = true;
@@ -197,39 +171,99 @@ void mainWindow::paramView() {
                                     (float)activeImage()->width / activeImage()->height :
                                     (float)activeImage()->height / activeImage()->width; paramChange = true;}
 
-                                // Preset buttons — driven by appPrefs.prefs.cropPresets.
-                                // Uniform width: widest label across all 6 presets + extra padding.
-                                // Laid out as two rows of 3, centered.
-                                ImGui::Spacing();
-                                const float aspExtraPad = 28.0f;
-                                float aspBtnW = 0.0f;
-                                for (const auto& p : appPrefs.prefs.cropPresets)
-                                    aspBtnW = std::max(aspBtnW, ImGui::CalcTextSize(p.name.c_str()).x);
-                                aspBtnW += fp + aspExtraPad;
-                                const float aspRowW = aspBtnW * 3.0f + sp * 2.0f;
-
-                                for (int pi = 0; pi < 6; pi++) {
-                                    if (pi % 3 == 0)
-                                        ImGui::SetCursorPosX((innerW - aspRowW) * 0.5f);
-                                    else
-                                        ImGui::SameLine();
-                                    const auto& p = appPrefs.prefs.cropPresets[pi];
-                                    ImGui::PushID(pi);
-                                    if (ImGui::Button(p.name.c_str(), ImVec2(aspBtnW, 0))) {
-                                        activeImage()->imgParam.imageCropAspect = p.value;
-                                        updateCrop = true;
-                                    }
-                                    ImGui::PopID();
+                                const char* presetName = "Custom";
+                                for (const auto& preset : appPrefs.prefs.cropPresets) {
+                                    if (std::abs(activeImage()->imgParam.imageCropAspect - preset.value) < 0.0001f)
+                                        presetName = preset.name.c_str();
                                 }
+                                ImGui::SetNextItemWidth(-1.0f);
+                                if (ImGui::BeginCombo("##CropPreset", presetName)) {
+                                    for (int pi = 0; pi < 6; ++pi) {
+                                        const auto& preset = appPrefs.prefs.cropPresets[pi];
+                                        const bool selected = std::abs(activeImage()->imgParam.imageCropAspect - preset.value) < 0.0001f;
+                                        ImGui::PushID(pi);
+                                        if (ImGui::Selectable(preset.name.c_str(), selected)) {
+                                            activeImage()->imgParam.imageCropAspect = preset.value;
+                                            updateCrop = true;
+                                        }
+                                        if (selected) ImGui::SetItemDefaultFocus();
+                                        ImGui::PopID();
+                                    }
+                                    ImGui::EndCombo();
+                                }
+                                ImGui::SetItemTooltip("Crop aspect ratio preset");
                             }
                         } else {
-                            // Default — "Image Crop" button centered
-                            const float imgCropW = ImGui::CalcTextSize("Image Crop").x + fp;
-                            ImGui::SetCursorPosX((innerW - imgCropW) * 0.5f);
-                            if (ImGui::Button("Image Crop", ImVec2(imgCropW, 0))) {
+                            if (ImGui::Button("Image Crop", ImVec2(-1, 0))) {
                                 paramChange |= true; cropVisible = true; activeImage()->imgParam.cropEnable = false;
                             }
                         }
+                        ImGui::Spacing();
+                        ImGui::SeparatorText("Roll");
+                        ImGui::BeginDisabled(activeRoll()->imagesLoading ||
+                            (!cropVisible && !activeImage()->imgParam.cropEnable));
+                        if (ImGui::Button("Apply Crop to Roll", ImVec2(-1, 0))) {
+                            const imageParams source = activeImage()->imgParam;
+                            for (int i = 0; i < activeRollSize(); ++i) {
+                                image* img = getImage(i);
+                                imageViewCoordinates::applyCropFrom(img->imgParam, source,
+                                    img->height > 0 ? (float)img->width / img->height : 1.0f);
+                                img->needMetaWrite = true;
+                            }
+                            cropVisible = false;
+                            firstImage = true;
+                            paramChange = true;
+                            rollRender();
+                        }
+                        ImGui::SetItemTooltip("Apply this crop to every image in the current roll.\nEach analysis region will match the applied crop.");
+                        ImGui::EndDisabled();
+                        ImGui::Spacing();
+                        static float autoCropThreshold = 8.0f;
+                        static float autoCropInset = 0.5f;
+                        ImGui::BeginDisabled(activeRoll()->imagesLoading || gpu->m_rendering);
+                        static int autoCropped = -1, autoSkipped = 0;
+                        if (ImGui::Button("Auto Crop Roll", ImVec2(-1, 0))) {
+                            autoCropped = autoSkipped = 0;
+                            for (int i = 0; i < activeRollSize(); ++i) {
+                                image* img = getImage(i);
+                                const auto bounds = img->imageLoaded ? autoCrop::detect(img->rawImgData,
+                                    img->width, img->height, autoCropThreshold / 100.0f, autoCropInset / 100.0f) : std::nullopt;
+                                if (!bounds) { ++autoSkipped; continue; }
+                                imageParams detected = img->imgParam;
+                                detected.imageCropMinX = bounds->left;
+                                detected.imageCropMaxX = bounds->right;
+                                detected.imageCropMinY = bounds->top;
+                                detected.imageCropMaxY = bounds->bottom;
+                                detected.arbitraryRotation = 0.0f;
+                                detected.lockAspect = false;
+                                const float cropWidth = (bounds->right - bounds->left) * img->width;
+                                const float cropHeight = (bounds->bottom - bounds->top) * img->height;
+                                detected.imageCropAspect = std::max(cropWidth, cropHeight) / std::min(cropWidth, cropHeight);
+                                imageViewCoordinates::applyCropFrom(img->imgParam, detected, (float)img->width / img->height);
+                                img->needMetaWrite = true;
+                                if (img == activeImage()) { cropVisible = false; firstImage = true; }
+                                imgRender(img, r_bg);
+                                ++autoCropped;
+                            }
+                            if (autoCropped > 0) {
+                                paramChange = true;
+                            }
+                        }
+                        ImGui::SetItemTooltip("Detect and remove black outer borders separately for each scan.\nUses the original image, resets crop straightening, and adjusts analysis regions.\nImages without a clear border keep their existing crop.");
+                        ImGui::EndDisabled();
+                        if (ImGui::TreeNode("Auto Crop Settings")) {
+                            ImGui::TextUnformatted("Border Threshold");
+                            ImGui::SetNextItemWidth(-1.0f);
+                            ImGui::SliderFloat("##AutoCropThreshold", &autoCropThreshold, 1.0f, 30.0f, "%.0f%%");
+                            ImGui::SetItemTooltip("How dark the outer border must be relative to the image.\nIncrease if dark border remains after auto cropping.");
+                            ImGui::TextUnformatted("Crop Inset");
+                            ImGui::SetNextItemWidth(-1.0f);
+                            ImGui::SliderFloat("##AutoCropInset", &autoCropInset, 0.0f, 3.0f, "%.1f%%");
+                            ImGui::SetItemTooltip("Extra trim inside the detected frame to remove thin edges and rounded corners.");
+                            ImGui::TreePop();
+                        }
+                        if (autoCropped >= 0)
+                            ImGui::TextWrapped("Auto crop: %d cropped, %d unchanged.", autoCropped, autoSkipped);
                     }
                     ImGui::EndChild();
                     ImGui::PopStyleColor(2);

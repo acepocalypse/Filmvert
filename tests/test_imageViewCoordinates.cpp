@@ -6,7 +6,7 @@
 using Catch::Matchers::WithinAbs;
 using namespace imageViewCoordinates;
 
-TEST_CASE("Apply Crop replaces the analysis zone with the crop bounds", "[viewer][crop][analysis]") {
+TEST_CASE("Apply Crop follows crop width with a top and bottom border inset", "[viewer][crop][analysis]") {
     for (int rotation = 1; rotation <= 8; ++rotation) {
         for (float angle : {0.0f, 15.0f, -15.0f}) {
             CAPTURE(rotation, angle);
@@ -30,11 +30,71 @@ TEST_CASE("Apply Crop replaces the analysis zone with the crop bounds", "[viewer
                 Point view;
                 REQUIRE(sourceToViewUnclipped({params.cropBoxX[i], params.cropBoxY[i]},
                                              params, 1.5f, view));
-                const Point expected = orient(corners[i], rotation);
+                Point expected = orient(corners[i], rotation);
+                expected.y = expected.y == 0.0f ? 0.02f : 0.98f;
                 CHECK_THAT(view.x, WithinAbs(expected.x, 1e-6f));
                 CHECK_THAT(view.y, WithinAbs(expected.y, 1e-6f));
             }
             CHECK_FALSE(fitAnalysisRegionToView(params, 1.5f));
+        }
+    }
+}
+
+TEST_CASE("Roll crops align analysis for each image without copying color or orientation", "[viewer][crop][analysis]") {
+    imageParams source;
+    source.imageCropMinX = 0.3f;
+    source.imageCropMaxX = 0.7f;
+    source.imageCropMinY = 0.25f;
+    source.imageCropMaxY = 0.65f;
+    source.arbitraryRotation = 12.0f;
+    source.imageCropAspect = 1.5f;
+    source.lockAspect = true;
+    source.cropEnable = false; // Also applies directly from the editing overlay.
+    source.rotation = 1;
+    source.temp = 0.7f;
+    for (float aspect : {0.75f, 1.0f, 1.5f}) {
+        imageParams target;
+        target.rotation = 6;
+        target.temp = -0.2f;
+        target.cropVisible = true;
+        applyCropFrom(target, source, aspect);
+        CHECK(target.cropEnable);
+        CHECK_FALSE(target.cropVisible);
+        CHECK(target.rotation == 6);
+        CHECK(target.temp == -0.2f);
+        CHECK(target.lockAspect);
+        CHECK(target.imageCropAspect == 1.5f);
+        const Point corners[] = {{0.0f, 0.0f}, {1.0f, 0.0f},
+                                 {1.0f, 1.0f}, {0.0f, 1.0f}};
+        for (int i = 0; i < 4; ++i) {
+            Point view;
+            REQUIRE(sourceToViewUnclipped({target.cropBoxX[i], target.cropBoxY[i]}, target, aspect, view));
+            auto expected = orient(corners[i], target.rotation);
+            expected.y = expected.y == 0.0f ? 0.02f : 0.98f;
+            CHECK_THAT(view.x, WithinAbs(expected.x, 1e-6f));
+            CHECK_THAT(view.y, WithinAbs(expected.y, 1e-6f));
+        }
+    }
+    CHECK_FALSE(source.cropEnable);
+}
+
+TEST_CASE("Reapplying a moved crop updates both analysis edges without accumulating inset", "[viewer][crop][analysis]") {
+    imageParams params;
+    params.cropEnable = true;
+    params.rotation = 1;
+    for (const auto bounds : {std::array<float, 2>{0.1f, 0.9f},
+                              std::array<float, 2>{0.3f, 0.6f}}) {
+        params.imageCropMinX = 0.2f;
+        params.imageCropMaxX = 0.8f;
+        params.imageCropMinY = bounds[0];
+        params.imageCropMaxY = bounds[1];
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            alignAnalysisRegionToCrop(params, 1.5f);
+            for (int i = 0; i < 4; ++i) {
+                CHECK_THAT(params.cropBoxX[i], WithinAbs(i == 0 || i == 3 ? 0.2f : 0.8f, 1e-6f));
+                const float y = bounds[0] + (i < 2 ? 0.02f : 0.98f) * (bounds[1] - bounds[0]);
+                CHECK_THAT(params.cropBoxY[i], WithinAbs(y, 1e-6f));
+            }
         }
     }
 }

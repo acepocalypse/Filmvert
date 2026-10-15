@@ -45,6 +45,9 @@ Enable **Robust Analysis** in the existing Analysis panel for a fast, optional a
 Robust Analysis keeps the same saved black/white-point parameters and adds no processing during slider edits. Disable it to use the original blur-based analysis. Its color estimates are a starting point; adjust white balance and tone to suit the scan. Flat or empty regions leave the existing conversion unchanged.
 
 ### Image Adjustments
+
+In **Geometry**, click **Auto Crop Roll** to remove black scan borders separately for each image. **Border Threshold** controls detection sensitivity; **Crop Inset** adds a small trim to remove thin frame remnants. Detection uses the original scan and resets crop straightening. Images without a clear border keep their existing crop. Analysis regions follow the detected crops, and the operation supports undo. Inspect the results before exporting; dark image content may need a manual crop.
+
 Depending upon the results of the analysis, the **Analyzed White Point** and **Analyzed Black Point** can be adjusted to taste.
 
 Further, the **Grade** options can be used to set a quick grade on an image.
